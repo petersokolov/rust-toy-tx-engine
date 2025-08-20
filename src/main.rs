@@ -1,5 +1,9 @@
 use log::info;
 
+use rust_toy_tx_engine::{
+    engine::Engine, run_engine_with_source, transaction::CsvTransactionSource,
+};
+
 fn main() {
     env_logger::init();
 
@@ -9,6 +13,11 @@ fn main() {
         std::process::exit(1);
     }
 
+    // TODO: handle path normalization (expand ~, check canonical form)
     let input_file = &args[1];
     info!("Input file: {}", input_file);
+
+    let mut engine = Engine::new();
+    let mut source = CsvTransactionSource::new(input_file);
+    run_engine_with_source(&mut engine, &mut source);
 }
