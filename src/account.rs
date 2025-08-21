@@ -75,11 +75,15 @@ impl Account {
         Ok(())
     }
 
+    /// Dispute a transaction by increasing held funds for the account.
     pub fn dispute(&mut self, amount: Decimal) -> Result<(), AccountError> {
-        if self.is_locked {
-            return Err(AccountError::AccountLocked(self.client_id));
-        }
         self.held += amount;
+        Ok(())
+    }
+
+    /// Resolve a dispute by releasing the held funds.
+    pub fn resolve(&mut self, amount: Decimal) -> Result<(), AccountError> {
+        self.held -= amount;
         Ok(())
     }
 }
@@ -163,4 +167,20 @@ mod tests {
         assert_eq!(account.get_available(), Decimal::new(-10, 2));
         assert_eq!(account.is_locked, false);
     }
+
+    #[test]
+    fn test_resolve() {
+        let mut account = Account::new(1);
+        let deposit_amount = Decimal::new(100, 2);
+        let dispute_amount = Decimal::new(30, 2);
+
+        account.deposit(1, deposit_amount).unwrap();
+        account.dispute(dispute_amount).unwrap();
+
+        let result = account.resolve(dispute_amount);
+        assert!(result.is_ok());
+        assert_eq!(account.held, Decimal::ZERO);
+        assert_eq!(account.get_available(), deposit_amount);
+    }
+
 }

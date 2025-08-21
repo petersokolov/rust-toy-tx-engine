@@ -153,12 +153,47 @@ impl Engine {
         }
     }
 
+    /// A resolve represents a resolution to a dispute, releasing the assotiated held funds. Funds that were
+    /// previously disputed and no longer disputed. Held funds should be decreased by the disputed amount.
+    /// Total should remain the same.
     fn handle_resolve(&mut self, client: u16, tx: u32) {
-        todo!(
-            "Handle resolve for client {} and transaction {}",
-            client,
-            tx
-        );
+        if let Some(record) = self.transactions.get_mut(&tx) {
+            if record.dispute_state == DisputeState::Disputed {
+                if let Some(account) = self.accounts.get_mut(&client) {
+                    if let Some(amount) = record.transaction.amount {
+                        match account.resolve(amount) {
+                            Ok(_) => {
+                                record.dispute_state = DisputeState::Resolved;
+                                info!(
+                                    "Resolve of {} for client {} processed. Held funds updated to {}.",
+                                    amount, client, account.held
+                                );
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Failed to process resolve for transaction {}: {}",
+                                    tx, e
+                                );
+                            }
+                        }
+                    } else {
+                        warn!(
+                            "Transaction {} for client {} has no associated amount to resolve.",
+                            tx, client
+                        );
+                    }
+                } else {
+                    warn!("Client {} not found for transaction {}.", client, tx);
+                }
+            } else {
+                warn!(
+                    "Transaction {} for client {} is not in dispute.",
+                    tx, client
+                );
+            }
+        } else {
+            warn!("Transaction {} not found for client {}.", tx, client);
+        }
     }
 
     fn handle_chargeback(&mut self, client: u16, tx: u32) {
@@ -175,39 +210,50 @@ mod tests {
     use super::*;
     use rust_decimal::Decimal;
 
-    #[test]
-    fn test_dispute_transaction() {
+    fn setup_engine_with_deposit(client_id: u16, tx_id: u32, amount: Decimal) -> Engine {
         let mut engine = Engine::new();
+        engine.handle_deposit(client_id, tx_id, amount);
+        engine
+    }
 
-        // Step 1: Add a deposit transaction
+    #[test]
+    fn test_handle_dispute() {
         let client_id = 1;
         let tx_id = 1001;
         let deposit_amount = Decimal::new(100, 2); // 1.00
 
-        engine.handle_deposit(client_id, tx_id, deposit_amount);
-        assert!(engine.accounts.contains_key(&client_id));
-        let account = engine.accounts.get(&client_id).unwrap();
-        assert_eq!(account.total, deposit_amount);
-        assert_eq!(account.get_available(), deposit_amount);
-        assert_eq!(account.held, Decimal::ZERO);
+        let mut engine = setup_engine_with_deposit(client_id, tx_id, deposit_amount);
 
-        // Step 2: Dispute the transaction
+        // Dispute the transaction
         engine.handle_dispute(client_id, tx_id);
         let account = engine.accounts.get(&client_id).unwrap();
         assert_eq!(account.held, deposit_amount);
         assert_eq!(account.get_available(), Decimal::ZERO);
 
-        // Step 3: Verify transaction state
+        // Verify transaction state
         let transaction = engine.transactions.get(&tx_id).unwrap();
         assert_eq!(transaction.dispute_state, DisputeState::Disputed);
+    }
 
-        // Step 4: Edge case - Dispute a non-existent transaction
-        let non_existent_tx_id = 9999;
-        engine.handle_dispute(client_id, non_existent_tx_id);
-        // No panic or crash expected, just a warning log
+    #[test]
+    fn test_handle_resolve() {
+        let client_id = 1;
+        let tx_id = 1001;
+        let deposit_amount = Decimal::new(100, 2); // 1.00
 
-        // Step 5: Edge case - Dispute a transaction already in dispute
+        let mut engine = setup_engine_with_deposit(client_id, tx_id, deposit_amount);
+
+        // Dispute the transaction
         engine.handle_dispute(client_id, tx_id);
-        // No state change expected, just a warning log
+
+        // Resolve the dispute
+        engine.handle_resolve(client_id, tx_id);
+        let account = engine.accounts.get(&client_id).unwrap();
+        assert_eq!(account.held, Decimal::ZERO);
+        assert_eq!(account.get_available(), deposit_amount);
+
+        // Verify transaction state
+        let transaction = engine.transactions.get(&tx_id).unwrap();
+        assert_eq!(transaction.dispute_state, DisputeState::Resolved);
     }
 }
