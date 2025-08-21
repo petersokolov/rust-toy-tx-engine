@@ -86,6 +86,15 @@ impl Account {
         self.held -= amount;
         Ok(())
     }
+
+    /// Chargeback a transaction by withdrawing held funds for the account.
+    /// Total should be reduced by amount and account should be locked.
+    pub fn chargeback(&mut self, amount: Decimal) -> Result<(), AccountError> {
+        self.held -= amount;
+        self.total -= amount;
+        self.is_locked = true;
+        Ok(())
+    }
 }
 
 impl Default for Account {
@@ -183,4 +192,19 @@ mod tests {
         assert_eq!(account.get_available(), deposit_amount);
     }
 
+    #[test]
+    fn test_chargeback() {
+        let mut account = Account::new(1);
+        let deposit_amount = Decimal::new(100, 2);
+        let dispute_amount = Decimal::new(50, 2);
+
+        account.total = deposit_amount;
+        account.held = dispute_amount;
+
+        assert!(account.chargeback(dispute_amount).is_ok());
+
+        assert_eq!(account.total, deposit_amount - dispute_amount);
+        assert_eq!(account.held, Decimal::ZERO);
+        assert!(account.is_locked);
+    }
 }

@@ -170,10 +170,7 @@ impl Engine {
                                 );
                             }
                             Err(e) => {
-                                warn!(
-                                    "Failed to process resolve for transaction {}: {}",
-                                    tx, e
-                                );
+                                warn!("Failed to process resolve for transaction {}: {}", tx, e);
                             }
                         }
                     } else {
@@ -196,12 +193,45 @@ impl Engine {
         }
     }
 
+    /// A chargeback is the final state of a dispute and represents the client reversing a transaction.
+    /// Funds that were held have now been withdrawn. This means that the clients fheld funds and total funds
+    /// should decreaseby the amount previously disputed.
+    /// If a chargeback occurs the client account should be immediately frozen.
     fn handle_chargeback(&mut self, client: u16, tx: u32) {
-        todo!(
-            "Handle chargeback for client {} and transaction {}",
-            client,
-            tx
-        );
+        if let Some(record) = self.transactions.get_mut(&tx) {
+            if record.dispute_state == DisputeState::Disputed {
+                if let Some(account) = self.accounts.get_mut(&client) {
+                    if let Some(amount) = record.transaction.amount {
+                        match account.chargeback(amount) {
+                            Ok(_) => {
+                                record.dispute_state = DisputeState::ChargedBack;
+                                info!(
+                                    "Chargeback of {} for client {} processed. Account locked.",
+                                    amount, client
+                                );
+                            }
+                            Err(e) => {
+                                warn!("Failed to process chargeback for transaction {}: {}", tx, e);
+                            }
+                        }
+                    } else {
+                        warn!(
+                            "Transaction {} for client {} has no associated amount to chargeback.",
+                            tx, client
+                        );
+                    }
+                } else {
+                    warn!("Client {} not found for transaction {}.", client, tx);
+                }
+            } else {
+                warn!(
+                    "Transaction {} for client {} is not in dispute.",
+                    tx, client
+                );
+            }
+        } else {
+            warn!("Transaction {} not found for client {}.", tx, client);
+        }
     }
 }
 
@@ -255,5 +285,40 @@ mod tests {
         // Verify transaction state
         let transaction = engine.transactions.get(&tx_id).unwrap();
         assert_eq!(transaction.dispute_state, DisputeState::Resolved);
+    }
+
+    #[test]
+    fn test_handle_chargeback() {
+        let client_id = 1;
+        let tx_id = 1001;
+        let deposit_amount = Decimal::new(100, 2); // 1.00
+
+        let mut engine = setup_engine_with_deposit(client_id, tx_id, deposit_amount);
+
+        // Dispute the transaction
+        engine.handle_dispute(client_id, tx_id);
+        let account = engine.accounts.get(&client_id).unwrap();
+        assert_eq!(account.held, deposit_amount);
+        assert_eq!(account.get_available(), Decimal::ZERO);
+
+        // Chargeback the transaction
+        engine.handle_chargeback(client_id, tx_id);
+        let account = engine.accounts.get(&client_id).unwrap();
+        assert_eq!(account.total, Decimal::ZERO);
+        assert_eq!(account.held, Decimal::ZERO);
+        assert!(account.is_locked);
+
+        // Verify transaction state
+        let transaction = engine.transactions.get(&tx_id).unwrap();
+        assert_eq!(transaction.dispute_state, DisputeState::ChargedBack);
+
+        // Edge case: Chargeback a non-existent transaction
+        let non_existent_tx_id = 9999;
+        engine.handle_chargeback(client_id, non_existent_tx_id);
+        // No panic or crash expected, just a warning log
+
+        // Edge case: Chargeback a transaction not in dispute
+        engine.handle_chargeback(client_id, tx_id);
+        // No state change expected, just a warning log
     }
 }
