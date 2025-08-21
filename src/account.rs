@@ -2,13 +2,13 @@ use log::{info, warn};
 use rust_decimal::Decimal;
 use thiserror::Error;
 
-/// Account represents a user's account with available, held, and total balances.
+/// Account represents a user's account with total, held, and calculated available balances.
 #[derive(Debug, Clone)]
 pub struct Account {
     // Unique identifier for the client
     pub client_id: u16,
-    // Available funds
-    pub available: Decimal,
+    // Total funds (available + held)
+    pub total: Decimal,
     // Held funds (e.g., in dispute)
     pub held: Decimal,
     // Indicates if the account is locked
@@ -19,10 +19,15 @@ impl Account {
     pub fn new(client_id: u16) -> Self {
         Self {
             client_id,
-            available: Decimal::ZERO,
+            total: Decimal::ZERO,
             held: Decimal::ZERO,
             is_locked: false,
         }
+    }
+
+    /// Calculate available funds as total - held.
+    pub fn get_available(&self) -> Decimal {
+        self.total - self.held
     }
 
     // Deposit funds into the account. If account is locked, the deposit should not be processed.
@@ -34,7 +39,7 @@ impl Account {
             );
             return Err(AccountError::AccountLocked(self.client_id));
         }
-        self.available += amount;
+        self.total += amount;
         info!(
             "Deposit of {} for client {} (tx {}) processed.",
             amount, self.client_id, tx
@@ -51,14 +56,18 @@ impl Account {
             );
             return Err(AccountError::AccountLocked(self.client_id));
         }
-        if self.available < amount {
+        if self.get_available() < amount {
             warn!(
                 "Withdrawal of {} for client {} (tx {}) not processed. Insufficient funds. Available: {}, Held: {}",
-                amount, self.client_id, tx, self.available, self.held
+                amount,
+                self.client_id,
+                tx,
+                self.get_available(),
+                self.held
             );
             return Err(AccountError::InsufficientFunds(self.client_id));
         }
-        self.available -= amount;
+        self.total -= amount;
         info!(
             "Withdrawal of {} for client {} (tx {}) processed.",
             amount, self.client_id, tx
@@ -66,8 +75,12 @@ impl Account {
         Ok(())
     }
 
-    pub fn get_total(&self) -> Decimal {
-        self.available + self.held
+    pub fn dispute(&mut self, amount: Decimal) -> Result<(), AccountError> {
+        if self.is_locked {
+            return Err(AccountError::AccountLocked(self.client_id));
+        }
+        self.held += amount;
+        Ok(())
     }
 }
 
@@ -96,8 +109,8 @@ mod tests {
         let deposit_amount = Decimal::new(100, 2);
 
         assert!(account.deposit(1, deposit_amount).is_ok());
-        assert_eq!(account.available, deposit_amount);
-        assert_eq!(account.get_total(), deposit_amount);
+        assert_eq!(account.get_available(), deposit_amount);
+        assert_eq!(account.total, deposit_amount);
     }
 
     #[test]
@@ -108,8 +121,8 @@ mod tests {
 
         account.deposit(1, deposit_amount).unwrap();
         assert!(account.withdraw(2, withdrawal_amount).is_ok());
-        assert_eq!(account.available, deposit_amount - withdrawal_amount);
-        assert_eq!(account.get_total(), deposit_amount - withdrawal_amount);
+        assert_eq!(account.get_available(), deposit_amount - withdrawal_amount);
+        assert_eq!(account.total, deposit_amount - withdrawal_amount);
     }
 
     #[test]
@@ -121,7 +134,33 @@ mod tests {
         account.deposit(1, deposit_amount).unwrap();
         let result = account.withdraw(3, deposit_amount + withdrawal_amount);
         assert!(result.is_err());
-        assert_eq!(account.available, deposit_amount);
-        assert_eq!(account.get_total(), deposit_amount);
+        assert_eq!(account.get_available(), deposit_amount);
+        assert_eq!(account.total, deposit_amount);
+    }
+
+    #[test]
+    fn test_dispute() {
+        let mut account = Account::new(1);
+        let deposit_amount = Decimal::new(100, 2);
+        let dispute_amount1 = Decimal::new(30, 2);
+        let dispute_amount2 = Decimal::new(80, 2);
+
+        account.deposit(1, deposit_amount).unwrap();
+
+        let result = account.dispute(dispute_amount1);
+        assert!(result.is_ok());
+        assert_eq!(account.held, dispute_amount1);
+        assert_eq!(account.get_available(), deposit_amount - dispute_amount1);
+
+        let result = account.dispute(dispute_amount2);
+        assert!(result.is_ok());
+        assert_eq!(account.held, dispute_amount1 + dispute_amount2);
+        assert_eq!(
+            account.get_available(),
+            deposit_amount - dispute_amount1 - dispute_amount2
+        );
+        assert_eq!(account.total, deposit_amount);
+        assert_eq!(account.get_available(), Decimal::new(-10, 2));
+        assert_eq!(account.is_locked, false);
     }
 }

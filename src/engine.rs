@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use log::{info, warn};
 use rust_decimal::Decimal;
 
 use crate::account::Account;
@@ -63,9 +64,9 @@ impl Engine {
             for (client_id, account) in &self.accounts {
                 println!(
                     "{client_id}, {}, {}, {}, {}",
-                    account.available,
+                    account.get_available(),
                     account.held,
-                    account.get_total(),
+                    account.total,
                     account.is_locked
                 );
             }
@@ -111,12 +112,45 @@ impl Engine {
             );
         }
     }
+
+    // In the envent of dispute, client claims that a transaction was erroneous and should be reversed.
+    // Clients available funds should be decreased by teh amount disputed, their held funds should
+    // increase by the amount disputed, while their total funds should remain the same
     fn handle_dispute(&mut self, client: u16, tx: u32) {
-        todo!(
-            "Handle dispute for client {} and transaction {}",
-            client,
-            tx
-        );
+        if let Some(record) = self.transactions.get_mut(&tx) {
+            if record.dispute_state == DisputeState::None {
+                if let Some(account) = self.accounts.get_mut(&client) {
+                    if let Some(amount) = record.transaction.amount {
+                        match account.dispute(amount) {
+                            Ok(_) => {
+                                record.dispute_state = DisputeState::Disputed;
+                                info!(
+                                    "Dispute of {} for client {} processed. Held funds updated to {}.",
+                                    amount, client, account.held
+                                );
+                            }
+                            Err(e) => {
+                                warn!("Failed to process dispute for transaction {}: {}", tx, e);
+                            }
+                        }
+                    } else {
+                        warn!(
+                            "Transaction {} for client {} has no associated amount to dispute.",
+                            tx, client
+                        );
+                    }
+                } else {
+                    warn!("Client {} not found for transaction {}.", client, tx);
+                }
+            } else {
+                warn!(
+                    "Transaction {} for client {} is already in dispute.",
+                    tx, client
+                );
+            }
+        } else {
+            warn!("Transaction {} not found for client {}.", tx, client);
+        }
     }
 
     fn handle_resolve(&mut self, client: u16, tx: u32) {
@@ -133,5 +167,47 @@ impl Engine {
             client,
             tx
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal::Decimal;
+
+    #[test]
+    fn test_dispute_transaction() {
+        let mut engine = Engine::new();
+
+        // Step 1: Add a deposit transaction
+        let client_id = 1;
+        let tx_id = 1001;
+        let deposit_amount = Decimal::new(100, 2); // 1.00
+
+        engine.handle_deposit(client_id, tx_id, deposit_amount);
+        assert!(engine.accounts.contains_key(&client_id));
+        let account = engine.accounts.get(&client_id).unwrap();
+        assert_eq!(account.total, deposit_amount);
+        assert_eq!(account.get_available(), deposit_amount);
+        assert_eq!(account.held, Decimal::ZERO);
+
+        // Step 2: Dispute the transaction
+        engine.handle_dispute(client_id, tx_id);
+        let account = engine.accounts.get(&client_id).unwrap();
+        assert_eq!(account.held, deposit_amount);
+        assert_eq!(account.get_available(), Decimal::ZERO);
+
+        // Step 3: Verify transaction state
+        let transaction = engine.transactions.get(&tx_id).unwrap();
+        assert_eq!(transaction.dispute_state, DisputeState::Disputed);
+
+        // Step 4: Edge case - Dispute a non-existent transaction
+        let non_existent_tx_id = 9999;
+        engine.handle_dispute(client_id, non_existent_tx_id);
+        // No panic or crash expected, just a warning log
+
+        // Step 5: Edge case - Dispute a transaction already in dispute
+        engine.handle_dispute(client_id, tx_id);
+        // No state change expected, just a warning log
     }
 }
