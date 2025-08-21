@@ -53,8 +53,8 @@ impl Account {
         }
         if self.available < amount {
             warn!(
-                "Withdrawal of {} for client {} (tx {}) not processed. Insufficient funds.",
-                amount, self.client_id, tx
+                "Withdrawal of {} for client {} (tx {}) not processed. Insufficient funds. Available: {}, Held: {}",
+                amount, self.client_id, tx, self.available, self.held
             );
             return Err(AccountError::InsufficientFunds(self.client_id));
         }

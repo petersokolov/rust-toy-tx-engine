@@ -55,6 +55,25 @@ impl Engine {
             }
         }
     }
+
+    // Generate a report of all accounts and their balances
+    pub fn report(&self) {
+        if !self.accounts.is_empty() {
+            println!("client, available, held, total, locked");
+            for (client_id, account) in &self.accounts {
+                println!(
+                    "{client_id}, {}, {}, {}, {}",
+                    account.available,
+                    account.held,
+                    account.get_total(),
+                    account.is_locked
+                );
+            }
+        } else {
+            println!("Engine has no accounts to report.");
+        }
+    }
+
     fn handle_deposit(&mut self, client: u16, tx: u32, amount: Decimal) {
         let account = self.accounts.entry(client).or_default();
         if account.deposit(tx, amount).is_ok() {

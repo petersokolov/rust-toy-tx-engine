@@ -20,4 +20,7 @@ fn main() {
     let mut engine = Engine::new();
     let mut source = CsvTransactionSource::new(input_file);
     run_engine_with_source(&mut engine, &mut source);
+
+    info!("Generating report...");
+    engine.report();
 }
